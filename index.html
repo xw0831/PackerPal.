@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Packer Pal - 智能行李打包助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Nunito', sans-serif; overflow-x: hidden; transition: background 1s ease; }
+        
+        /* 1. 初始渐变背景 */
+        .default-bg { background: linear-gradient(135deg, #22d3ee 0%, #3b82f6 50%, #fde047 100%); }
+
+        /* 玻璃拟态卡片 */
+        .glass { background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.3); }
+
+        /* 动画特效 */
+        .btn-hover-effect { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .btn-hover-effect:hover { transform: translateY(-5px) scale(1.02); box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15); }
+
+        /* 选项立体上浮 */
+        .item-hover { transition: transform 0.2s ease; cursor: pointer; }
+        .item-hover:hover { transform: translateY(-2px); background: rgba(255,255,255,0.9); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+
+        #weather-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+
+        /* 打印逻辑：只保留清单卡片 */
+        @media print {
+            body { background: white !important; padding: 0 !important; }
+            #weather-canvas, #input-section, header, #weather-info, #ai-tip, .no-print { display: none !important; }
+            #result-section { display: block !important; margin: 0 !important; width: 100% !important; }
+            #checklist-content { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 1rem !important; width: 100% !important; }
+            .glass { background: white !important; backdrop-filter: none !important; border: 1px solid #ddd !important; box-shadow: none !important; padding: 10px !important; }
+            h3 { font-size: 1.2rem !important; margin-bottom: 0.5rem !important; border-bottom: 1px solid #eee !important; }
+        }
+
+        .input-style { appearance: none; width: 100%; padding: 1rem; background: white; border: 1px solid #e5e7eb; border-radius: 1rem; outline: none; transition: all 0.2s; }
+        .input-style:focus { border-color: #22d3ee; box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.2); }
+    </style>
+</head>
+<body id="main-body" class="default-bg min-h-screen p-4 md:p-8 relative">
+
+    <canvas id="weather-canvas"></canvas>
+
+    <div class="max-w-4xl mx-auto relative z-10">
+        <header class="text-center mb-10 text-white drop-shadow-lg">
+            <h1 class="text-5xl font-bold mb-4">🧳 Packer Pal</h1>
+            <p class="text-lg font-semibold bg-black/10 inline-block px-6 py-2 rounded-full backdrop-blur-sm">智能行李打包助手</p>
+        </header>
+
+        <section id="input-section" class="max-w-md mx-auto">
+            <div class="glass p-8 rounded-3xl shadow-2xl">
+                <form id="packing-form" class="space-y-6">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">📍 目的地</label>
+                        <input type="text" id="destination" placeholder="例如：伦敦、香港、三亚" class="input-style" required>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">⏳ 天数</label>
+                            <input type="number" id="days" value="3" min="1" max="30" class="input-style" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">🎯 目的</label>
+                            <select id="purpose" class="input-style">
+                                <option value="休闲度假">休闲度假</option>
+                                <option value="商务出差">商务出差</option>
+                                <option value="探险徒步">探险徒步</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-bold py-5 rounded-2xl btn-hover-effect shadow-xl">✨ 生成我的专属清单</button>
+                </form>
+            </div>
+        </section>
+
+        <section id="loading-section" class="hidden flex flex-col items-center justify-center py-20 text-white">
+            <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-white mb-6"></div>
+            <p class="text-xl font-bold">正在感知目的地环境...</p>
+        </section>
+
+        <section id="result-section" class="hidden space-y-6">
+            <div id="weather-info" class="glass p-6 rounded-3xl shadow-lg border-l-8 border-yellow-400 flex flex-wrap items-center justify-between">
+                <div>
+                    <h2 id="display-dest" class="text-3xl font-bold text-gray-800">目的地</h2>
+                    <p id="weather-text" class="text-gray-600 font-medium">--</p>
+                </div>
+                <div class="flex gap-4 text-center">
+                    <div class="bg-white/50 px-4 py-2 rounded-xl text-xs">🌡️ 气温<br><span id="temp-range" class="text-lg font-bold">--</span></div>
+                    <div class="bg-white/50 px-4 py-2 rounded-xl text-xs">☀️ 紫外线<br><span id="uv-val" class="text-lg font-bold">--</span></div>
+                </div>
+            </div>
+
+            <div id="checklist-content" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+
+            <div id="ai-tip" class="glass p-5 rounded-2xl text-center text-blue-900 italic font-semibold shadow-md"></div>
+
+            <div class="flex gap-4 no-print pb-10">
+                <button onclick="location.reload()" class="flex-1 bg-white/30 hover:bg-white/50 text-white font-bold py-4 rounded-2xl transition backdrop-blur-md border border-white">🔄 返回修改</button>
+                <button onclick="window.print()" class="flex-1 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-bold py-4 rounded-2xl transition shadow-lg btn-hover-effect">🖨️ 打印清单</button>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('weather-canvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        let weatherType = 'default';
+
+        function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function drawSun() {
+            ctx.beginPath();
+            const grad = ctx.createRadialGradient(canvas.width-100, 100, 10, canvas.width-100, 100, 80);
+            grad.addColorStop(0, 'rgba(255, 255, 224, 0.9)');
+            grad.addColorStop(1, 'rgba(255, 165, 0, 0)');
+            ctx.fillStyle = grad;
+            ctx.arc(canvas.width-100, 100, 80, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if(weatherType === 'clear') drawSun();
+            ctx.fillStyle = (weatherType === 'rain' || weatherType === 'snow') ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.3)';
+            particles.forEach(p => {
+                ctx.beginPath();
+                if(weatherType === 'rain') ctx.rect(p.x, p.y, 1, p.size*5);
+                else if(weatherType === 'snow') ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+                else if(weatherType === 'cloudy') { ctx.arc(p.x, p.y, p.size*10, 0, Math.PI*2); ctx.fillStyle='rgba(200,200,200,0.1)'; }
+                else ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+                ctx.fill();
+                p.x += p.vx; p.y += p.vy;
+                if(p.y > canvas.height) p.y = -20;
+                if(p.x > canvas.width) p.x = 0;
+            });
+            requestAnimationFrame(animate);
+        }
+        animate();
+
+        const form = document.getElementById('packing-form');
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const dest = document.getElementById('destination').value;
+            document.getElementById('input-section').classList.add('hidden');
+            document.getElementById('loading-section').classList.remove('hidden');
+
+            try {
+                const res = await fetch(`https://wttr.in/${dest}?format=j1`);
+                const data = await res.json();
+                const cur = data.current_condition[0];
+                const dayData = data.weather[0];
+                
+                let desc = cur.lang_zh ? cur.lang_zh[0].value : cur.weatherDesc[0].value;
+                
+                // 【修改】计算全天大概率天气
+                const hourlyDescs = dayData.hourly.map(h => h.lang_zh ? h.lang_zh[0].value : h.weatherDesc[0].value);
+                const weatherCounts = { "雨": 0, "雪": 0, "晴": 0, "云": 0, "阴": 0 };
+                
+                hourlyDescs.forEach(d => {
+                    if (d.includes("雨")) weatherCounts["雨"]++;
+                    else if (d.includes("雪")) weatherCounts["雪"]++;
+                    else if (d.includes("晴")) weatherCounts["晴"]++;
+                    else if (d.includes("云")) weatherCounts["云"]++;
+                    else if (d.includes("阴")) weatherCounts["阴"]++;
+                });
+
+                let maxCount = 0;
+                let probWeather = "";
+                for (const [key, val] of Object.entries(weatherCounts)) {
+                    if (val > maxCount) {
+                        maxCount = val;
+                        probWeather = key;
+                    }
+                }
+
+                // 如果统计出了最高频天气，则覆盖当前时刻的描述
+                if (maxCount > 0) {
+                    if (probWeather === "雨") desc = "多雨";
+                    else if (probWeather === "雪") desc = "有雪";
+                    else if (probWeather === "晴") desc = "晴朗";
+                    else if (probWeather === "云" || probWeather === "阴") desc = "多云/阴天";
+                }
+                
+                setWeatherEffect(desc, parseInt(cur.temp_C));
+                
+                document.getElementById('display-dest').innerText = `📍 ${dest}`;
+                document.getElementById('weather-text').innerText = `大概率天气：${desc}`;
+                document.getElementById('temp-range').innerText = `${dayData.mintempC}° / ${dayData.maxtempC}°`;
+                document.getElementById('uv-val').innerText = `${dayData.uvIndex} (最高)`;
+
+                const listText = buildList(dest, dayData.maxtempC, dayData.mintempC, dayData.uvIndex, desc);
+                render(listText);
+            } catch (err) { 
+                render(buildList(dest, 25, 18, 5, "晴朗")); 
+            } finally {
+                document.getElementById('loading-section').classList.add('hidden');
+                document.getElementById('result-section').classList.remove('hidden');
+            }
+        });
+
+        function setWeatherEffect(desc, temp) {
+            particles = [];
+            let body = document.getElementById('main-body');
+            if(desc.includes("雨")) {
+                weatherType = 'rain'; body.style.background = "#374151";
+                for(let i=0; i<150; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:0, vy:12, size:2});
+            } else if(desc.includes("雪")) {
+                weatherType = 'snow'; body.style.background = "#94a3b8";
+                for(let i=0; i<100; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:1, vy:2, size:Math.random()*3+1});
+            } else if(desc.includes("云") || desc.includes("阴")) {
+                weatherType = 'cloudy'; body.style.background = "#64748b";
+                for(let i=0; i<20; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:0.2, vy:0, size:Math.random()*10+10});
+            } else {
+                weatherType = 'clear'; body.style.background = "linear-gradient(to bottom, #0ea5e9, #fbbf24)";
+                for(let i=0; i<30; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:0.3, vy:0.3, size:Math.random()*3});
+            }
+        }
+
+        function getWarmTip(type, dest, temp) {
+            const tips = {
+                'rain': `🌦️ 虽然目的地大概率有雨，但朦胧的景色也别有风味。记得带好雨具，照顾好自己，祝你在${dest}邂逅不一样的精彩！`,
+                'snow': `❄️ 雪花飘落的地方往往藏着童话。记得把自己裹得暖暖的，注意防滑，享受这纯净的冬日时光吧！`,
+                'cloudy': `☁️ 天空虽然被云朵遮住，但出发的心情永远是明媚的。多带件外套，在${dest}寻找属于你的风景。`,
+                'clear': `☀️ 愿好心情与艳阳同在！目的地天气晴好，请尽情拥抱阳光，祝你有一个明亮的旅程！`,
+                'default': `🌍 世界很大，目的地很美。带上这份清单，出发去遇见更好的自己，祝你在${dest}一切顺利！`
+            };
+            return tips[type] || tips['default'];
+        }
+
+        function buildList(dest, maxT, minT, uv, desc) {
+            const mainlandChina = ["北京","天津","上海","重庆","河北","山西","辽宁","吉林","黑龙江","江苏","浙江","安徽","福建","江西","山东","河南","湖北","湖南","广东","海南","四川","贵州","云南","陕西","甘肃","青海","内蒙古","广西","西藏","宁夏","新疆","三亚","成都","杭州","西安","广州","深圳","南京","武汉","青岛","大连","厦门","长沙","苏州","哈尔滨","长春","沈阳","石家庄","济南","郑州","合肥","南昌","福州","昆明","贵阳","兰州","西宁","银川","乌鲁木齐","拉萨","呼和浩特","南宁","海口"];
+            
+            const isOutsideMainland = (!mainlandChina.some(kw => dest.includes(kw)) || ["香港", "澳门", "台湾"].some(kw => dest.includes(kw))) || !/^[ \u4e00-\u9fa5]+$/.test(dest);
+
+            const needsBugSpray = parseInt(maxT) > 26 || ["泰国", "东南亚", "西双版纳", "三亚"].some(kw => dest.includes(kw));
+
+            let extra = "";
+            if(needsBugSpray) extra += "- 强力驱蚊水 [必带]\n";
+            if(parseInt(uv) >= 6) extra += "- 高倍防晒霜 & 墨镜 [必带]\n";
+            if(parseInt(maxT) - parseInt(minT) > 10) extra += "- 叠穿长袖 (防昼夜温差) [建议]\n";
+            if(desc.includes("雨")) extra += "- 结实折叠伞 [必带]\n";
+
+            return `必需证件
+- 身份证/护照 [必带]
+- 酒店机票确认单 [建议]
+${isOutsideMainland ? '- 适量外币现金 [建议]' : ''}
+
+衣物鞋帽
+- ${document.getElementById('days').value}套换洗衣物 [必带]
+- 舒适运动鞋 [必带]
+${parseInt(maxT) < 18 ? '- 挡风外套 [必带]' : '- 透气短袖 [必带]'}
+
+电子设备
+- 充电宝及数据线 [必带]
+${isOutsideMainland ? '- 万能转换插头 [必带]' : ''}
+
+洗漱护理
+- 旅行洗漱套装 [必带]
+${extra.includes('驱蚊水') ? '- 驱蚊水 [必带]' : ''}
+${extra.includes('防晒') ? '- 防晒霜/隔离 [必带]' : ''}
+
+药品建议
+- 个人常备药品 [必带]
+- 肠胃药/创可贴 [建议]
+
+其他物品
+${extra.includes('伞') ? '- 雨伞/雨具 [必带]' : '- 晴雨两用伞 [建议]'}
+- 便携式水杯 [建议]
+
+💡 ${getWarmTip(weatherType, dest, maxT)}`;
+        }
+
+        function render(text) {
+            const container = document.getElementById('checklist-content');
+            container.innerHTML = '';
+            const emojiMap = { "必需证件": "🪪", "衣物鞋帽": "👕", "电子设备": "💻", "洗漱护理": "🧴", "药品建议": "💊", "其他物品": "🎒" };
+            const lines = text.split('\n');
+            let currentList = null;
+
+            lines.forEach(line => {
+                const trimmed = line.trim();
+                const matched = Object.keys(emojiMap).find(c => trimmed.includes(c));
+                if (matched) {
+                    const card = document.createElement('div');
+                    card.className = "glass p-6 rounded-3xl shadow-lg border-t-4 border-blue-500";
+                    card.innerHTML = `<h3 class="text-xl font-bold mb-4 border-b border-white/50 pb-2">${emojiMap[matched]} ${matched}</h3>`;
+                    currentList = document.createElement('ul');
+                    currentList.className = "space-y-3";
+                    card.appendChild(currentList);
+                    container.appendChild(card);
+                } else if (currentList && (trimmed.includes('[必带]') || trimmed.includes('[建议]'))) {
+                    const li = document.createElement('li');
+                    li.className = "item-hover flex items-center gap-3 p-2 rounded-xl";
+                    li.innerHTML = `<input type="checkbox" class="w-5 h-5 rounded-lg border-gray-300 text-blue-600 cursor-pointer"><span class="text-gray-700 font-medium">${trimmed.replace(/^[-*•\d.]+\s*/, '')}</span>`;
+                    currentList.appendChild(li);
+                } else if (trimmed.includes('💡')) {
+                    document.getElementById('ai-tip').innerText = trimmed.replace('💡', '');
+                }
+            });
+        }
+    </script>
+</body>
+</html>
