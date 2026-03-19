@@ -8,24 +8,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Nunito', sans-serif; overflow-x: hidden; transition: background 1s ease; }
-        
-        /* 1. 初始渐变背景 */
         .default-bg { background: linear-gradient(135deg, #22d3ee 0%, #3b82f6 50%, #fde047 100%); }
-
-        /* 玻璃拟态卡片 */
         .glass { background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.3); }
-
-        /* 动画特效 */
         .btn-hover-effect { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         .btn-hover-effect:hover { transform: translateY(-5px) scale(1.02); box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15); }
-
-        /* 选项立体上浮 */
         .item-hover { transition: transform 0.2s ease; cursor: pointer; }
         .item-hover:hover { transform: translateY(-2px); background: rgba(255,255,255,0.9); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-
         #weather-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-
-        /* 打印逻辑：只保留清单卡片 */
         @media print {
             body { background: white !important; padding: 0 !important; }
             #weather-canvas, #input-section, header, #weather-info, #ai-tip, .no-print { display: none !important; }
@@ -34,7 +23,6 @@
             .glass { background: white !important; backdrop-filter: none !important; border: 1px solid #ddd !important; box-shadow: none !important; padding: 10px !important; }
             h3 { font-size: 1.2rem !important; margin-bottom: 0.5rem !important; border-bottom: 1px solid #eee !important; }
         }
-
         .input-style { appearance: none; width: 100%; padding: 1rem; background: white; border: 1px solid #e5e7eb; border-radius: 1rem; outline: none; transition: all 0.2s; }
         .input-style:focus { border-color: #22d3ee; box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.2); }
     </style>
@@ -54,7 +42,7 @@
                 <form id="packing-form" class="space-y-6">
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-2">📍 目的地</label>
-                        <input type="text" id="destination" placeholder="例如：伦敦、香港、三亚" class="input-style" required>
+                        <input type="text" id="destination" placeholder="例如：伦敦、东京、上海" class="input-style" required>
                     </div>
                     <div class="grid grid-cols-2 gap-4">
                         <div>
@@ -77,14 +65,14 @@
 
         <section id="loading-section" class="hidden flex flex-col items-center justify-center py-20 text-white">
             <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-white mb-6"></div>
-            <p class="text-xl font-bold">正在感知目的地环境...</p>
+            <p class="text-xl font-bold">正在通过全球气象站获取真实数据...</p>
         </section>
 
         <section id="result-section" class="hidden space-y-6">
             <div id="weather-info" class="glass p-6 rounded-3xl shadow-lg border-l-8 border-yellow-400 flex flex-wrap items-center justify-between">
                 <div>
                     <h2 id="display-dest" class="text-3xl font-bold text-gray-800">目的地</h2>
-                    <p id="weather-text" class="text-gray-600 font-medium">--</p>
+                    <p id="weather-text" class="text-gray-600 font-medium">获取中...</p>
                 </div>
                 <div class="flex gap-4 text-center">
                     <div class="bg-white/50 px-4 py-2 rounded-xl text-xs">🌡️ 气温<br><span id="temp-range" class="text-lg font-bold">--</span></div>
@@ -104,6 +92,14 @@
     </div>
 
     <script>
+        // --- 核心天气代码映射表 (WMO Codes) ---
+        const wmoMapping = {
+            0: "晴朗", 1: "大部晴朗", 2: "多云", 3: "阴天",
+            45: "雾", 48: "霾", 51: "细雨", 53: "细雨", 55: "细雨",
+            61: "小雨", 63: "中雨", 65: "大雨", 71: "小雪", 73: "中雪", 75: "大雪",
+            80: "阵雨", 81: "强阵雨", 82: "极端暴雨", 95: "雷阵雨"
+        };
+
         const canvas = document.getElementById('weather-canvas');
         const ctx = canvas.getContext('2d');
         let particles = [];
@@ -150,64 +146,44 @@
             document.getElementById('loading-section').classList.remove('hidden');
 
             try {
-                const res = await fetch(`https://wttr.in/${dest}?format=j1`);
+                // 第一步：地理编码 - 获取经纬度 (使用 OpenStreetMap Nominatim 免费接口)
+                const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(dest)}&format=json&limit=1`);
+                const geoData = await geoRes.json();
                 
-                // 【核心修复】如果接口被限流或报错，直接跳入 catch 执行兜底逻辑
-                if (!res.ok) throw new Error("API请求失败或被限流");
+                if (!geoData || geoData.length === 0) throw new Error("找不到该城市");
 
-                const data = await res.json();
-                const cur = data.current_condition[0];
-                const dayData = data.weather[0];
-                
-                let desc = cur.lang_zh ? cur.lang_zh[0].value : cur.weatherDesc[0].value;
-                
-                const hourlyDescs = dayData.hourly.map(h => h.lang_zh ? h.lang_zh[0].value : h.weatherDesc[0].value);
-                const weatherCounts = { "雨": 0, "雪": 0, "晴": 0, "云": 0, "阴": 0 };
-                
-                hourlyDescs.forEach(d => {
-                    if (d.includes("雨")) weatherCounts["雨"]++;
-                    else if (d.includes("雪")) weatherCounts["雪"]++;
-                    else if (d.includes("晴")) weatherCounts["晴"]++;
-                    else if (d.includes("云")) weatherCounts["云"]++;
-                    else if (d.includes("阴")) weatherCounts["阴"]++;
-                });
+                const lat = geoData[0].lat;
+                const lon = geoData[0].lon;
+                const formalName = geoData[0].display_name.split(',')[0]; // 获取更准确的城市名
 
-                let maxCount = 0;
-                let probWeather = "";
-                for (const [key, val] of Object.entries(weatherCounts)) {
-                    if (val > maxCount) {
-                        maxCount = val;
-                        probWeather = key;
-                    }
-                }
+                // 第二步：获取气象数据 (使用 Open-Meteo 工业级接口)
+                const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto`);
+                const weatherData = await weatherRes.json();
 
-                if (maxCount > 0) {
-                    if (probWeather === "雨") desc = "多雨";
-                    else if (probWeather === "雪") desc = "有雪";
-                    else if (probWeather === "晴") desc = "晴朗";
-                    else if (probWeather === "云" || probWeather === "阴") desc = "多云/阴天";
-                }
-                
-                setWeatherEffect(desc, parseInt(cur.temp_C));
-                
-                document.getElementById('display-dest').innerText = `📍 ${dest}`;
-                document.getElementById('weather-text').innerText = `大概率天气：${desc}`;
-                document.getElementById('temp-range').innerText = `${dayData.mintempC}° / ${dayData.maxtempC}°`;
-                document.getElementById('uv-val').innerText = `${dayData.uvIndex} (最高)`;
+                if (!weatherData.daily) throw new Error("气象数据不可用");
 
-                const listText = buildList(dest, dayData.maxtempC, dayData.mintempC, dayData.uvIndex, desc);
+                const daily = weatherData.daily;
+                const code = daily.weathercode[0];
+                const desc = wmoMapping[code] || "晴朗";
+                const maxT = Math.round(daily.temperature_2m_max[0]);
+                const minT = Math.round(daily.temperature_2m_min[0]);
+                const uv = daily.uv_index_max[0];
+
+                // 第三步：更新 UI
+                setWeatherEffect(desc, maxT);
+                document.getElementById('display-dest').innerText = `📍 ${formalName}`;
+                document.getElementById('weather-text').innerText = `当地天气：${desc}`;
+                document.getElementById('temp-range').innerText = `${minT}° / ${maxT}°`;
+                document.getElementById('uv-val').innerText = `${uv} (${uv > 6 ? '高' : '正常'})`;
+
+                // 第四步：根据真实数据生成清单
+                const listText = buildList(dest, maxT, minT, uv, desc);
                 render(listText);
-            } catch (err) { 
-                console.warn("天气接口暂时无法访问，启用默认降级方案", err);
-                
-                // 【核心修复】接口失败时，依然更新界面的目的地和默认天气数据，防止页面白板
-                setWeatherEffect("晴朗", 25);
-                document.getElementById('display-dest').innerText = `📍 ${dest}`;
-                document.getElementById('weather-text').innerText = `大概率天气：晴朗 (网络拥挤)`;
-                document.getElementById('temp-range').innerText = `18° / 25°`;
-                document.getElementById('uv-val').innerText = `5 (中等)`;
 
-                render(buildList(dest, 25, 18, 5, "晴朗")); 
+            } catch (err) {
+                console.error(err);
+                alert("无法获取该城市的真实天气，请检查城市名是否正确（如拼写或添加省份）。");
+                location.reload(); 
             } finally {
                 document.getElementById('loading-section').classList.add('hidden');
                 document.getElementById('result-section').classList.remove('hidden');
@@ -218,12 +194,12 @@
             particles = [];
             let body = document.getElementById('main-body');
             if(desc.includes("雨")) {
-                weatherType = 'rain'; body.style.background = "#374151";
+                weatherType = 'rain'; body.style.background = "#4b5563";
                 for(let i=0; i<150; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:0, vy:12, size:2});
             } else if(desc.includes("雪")) {
                 weatherType = 'snow'; body.style.background = "#94a3b8";
                 for(let i=0; i<100; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:1, vy:2, size:Math.random()*3+1});
-            } else if(desc.includes("云") || desc.includes("阴")) {
+            } else if(desc.includes("多云") || desc.includes("阴") || desc.includes("雾")) {
                 weatherType = 'cloudy'; body.style.background = "#64748b";
                 for(let i=0; i<20; i++) particles.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, vx:0.2, vy:0, size:Math.random()*10+10});
             } else {
@@ -234,54 +210,50 @@
 
         function getWarmTip(type, dest, temp) {
             const tips = {
-                'rain': `🌦️ 虽然目的地大概率有雨，但朦胧的景色也别有风味。记得带好雨具，照顾好自己，祝你在${dest}邂逅不一样的精彩！`,
-                'snow': `❄️ 雪花飘落的地方往往藏着童话。记得把自己裹得暖暖的，注意防滑，享受这纯净的冬日时光吧！`,
-                'cloudy': `☁️ 天空虽然被云朵遮住，但出发的心情永远是明媚的。多带件外套，在${dest}寻找属于你的风景。`,
-                'clear': `☀️ 愿好心情与艳阳同在！目的地天气晴好，请尽情拥抱阳光，祝你有一个明亮的旅程！`,
-                'default': `🌍 世界很大，目的地很美。带上这份清单，出发去遇见更好的自己，祝你在${dest}一切顺利！`
+                'rain': `🌦️ 目的地正在下雨，别让雨水打湿心情。带把好伞，雨中的${dest}也很有故事。`,
+                'snow': `❄️ 雪天虽美但寒冷，注意足部保暖和防滑，享受这纯净的一刻吧！`,
+                'cloudy': `☁️ 虽然没有阳光，但凉爽的天气最适合漫步，多带件轻薄外套以防变温。`,
+                'clear': `☀️ 阳光灿烂！是最适合拍照和出行的日子，请尽情享受你的旅程！`,
+                'default': `🌍 世界很大，带上这份清单，出发去遇见更好的自己。`
             };
             return tips[type] || tips['default'];
         }
 
         function buildList(dest, maxT, minT, uv, desc) {
-            const mainlandChina = ["北京","天津","上海","重庆","河北","山西","辽宁","吉林","黑龙江","江苏","浙江","安徽","福建","江西","山东","河南","湖北","湖南","广东","海南","四川","贵州","云南","陕西","甘肃","青海","内蒙古","广西","西藏","宁夏","新疆","三亚","成都","杭州","西安","广州","深圳","南京","武汉","青岛","大连","厦门","长沙","苏州","哈尔滨","长春","沈阳","石家庄","济南","郑州","合肥","南昌","福州","昆明","贵阳","兰州","西宁","银川","乌鲁木齐","拉萨","呼和浩特","南宁","海口"];
-            
-            const isOutsideMainland = (!mainlandChina.some(kw => dest.includes(kw)) || ["香港", "澳门", "台湾"].some(kw => dest.includes(kw))) || !/^[ \u4e00-\u9fa5]+$/.test(dest);
-
-            const needsBugSpray = parseInt(maxT) > 26 || ["泰国", "东南亚", "西双版纳", "三亚"].some(kw => dest.includes(kw));
+            const isOutsideMainland = /^[a-zA-Z\s]+$/.test(dest) || ["香港", "澳门", "台湾", "伦敦", "东京", "巴黎", "纽约"].some(kw => dest.includes(kw));
 
             let extra = "";
-            if(needsBugSpray) extra += "- 强力驱蚊水 [必带]\n";
-            if(parseInt(uv) >= 6) extra += "- 高倍防晒霜 & 墨镜 [必带]\n";
-            if(parseInt(maxT) - parseInt(minT) > 10) extra += "- 叠穿长袖 (防昼夜温差) [建议]\n";
-            if(desc.includes("雨")) extra += "- 结实折叠伞 [必带]\n";
+            if(maxT > 26) extra += "- 强力驱蚊水 [建议]\n";
+            if(uv >= 6) extra += "- 高倍防晒霜 & 墨镜 [必带]\n";
+            if(maxT - minT > 10) extra += "- 易穿脱的薄外套 [建议]\n";
+            if(desc.includes("雨")) extra += "- 坚固折叠伞 [必带]\n";
+            if(minT < 10) extra += "- 保暖内衣/暖贴 [建议]\n";
 
             return `必需证件
 - 身份证/护照 [必带]
 - 酒店机票确认单 [建议]
-${isOutsideMainland ? '- 适量外币现金 [建议]' : ''}
+${isOutsideMainland ? '- 适量外币现金/国际信用卡 [建议]' : ''}
 
 衣物鞋帽
 - ${document.getElementById('days').value}套换洗衣物 [必带]
 - 舒适运动鞋 [必带]
-${parseInt(maxT) < 18 ? '- 挡风外套 [必带]' : '- 透气短袖 [必带]'}
+${maxT < 18 ? '- 挡风保暖夹克 [必带]' : '- 透气短袖/夏装 [必带]'}
 
 电子设备
 - 充电宝及数据线 [必带]
 ${isOutsideMainland ? '- 万能转换插头 [必带]' : ''}
 
 洗漱护理
-- 旅行洗漱套装 [必带]
-${extra.includes('驱蚊水') ? '- 驱蚊水 [必带]' : ''}
+- 旅行洗漱套装 [建议]
 ${extra.includes('防晒') ? '- 防晒霜/隔离 [必带]' : ''}
 
 药品建议
-- 个人常备药品 [必带]
+- 个人常备/感冒药 [建议]
 - 肠胃药/创可贴 [建议]
 
 其他物品
-${extra.includes('伞') ? '- 雨伞/雨具 [必带]' : '- 晴雨两用伞 [建议]'}
-- 便携式水杯 [建议]
+${extra.includes('伞') ? '- 雨具 [必带]' : '- 晴雨伞 [建议]'}
+${extra}
 
 💡 ${getWarmTip(weatherType, dest, maxT)}`;
         }
