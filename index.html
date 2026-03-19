@@ -151,13 +151,16 @@
 
             try {
                 const res = await fetch(`https://wttr.in/${dest}?format=j1`);
+                
+                // 【核心修复】如果接口被限流或报错，直接跳入 catch 执行兜底逻辑
+                if (!res.ok) throw new Error("API请求失败或被限流");
+
                 const data = await res.json();
                 const cur = data.current_condition[0];
                 const dayData = data.weather[0];
                 
                 let desc = cur.lang_zh ? cur.lang_zh[0].value : cur.weatherDesc[0].value;
                 
-                // 【修改】计算全天大概率天气
                 const hourlyDescs = dayData.hourly.map(h => h.lang_zh ? h.lang_zh[0].value : h.weatherDesc[0].value);
                 const weatherCounts = { "雨": 0, "雪": 0, "晴": 0, "云": 0, "阴": 0 };
                 
@@ -178,7 +181,6 @@
                     }
                 }
 
-                // 如果统计出了最高频天气，则覆盖当前时刻的描述
                 if (maxCount > 0) {
                     if (probWeather === "雨") desc = "多雨";
                     else if (probWeather === "雪") desc = "有雪";
@@ -196,6 +198,15 @@
                 const listText = buildList(dest, dayData.maxtempC, dayData.mintempC, dayData.uvIndex, desc);
                 render(listText);
             } catch (err) { 
+                console.warn("天气接口暂时无法访问，启用默认降级方案", err);
+                
+                // 【核心修复】接口失败时，依然更新界面的目的地和默认天气数据，防止页面白板
+                setWeatherEffect("晴朗", 25);
+                document.getElementById('display-dest').innerText = `📍 ${dest}`;
+                document.getElementById('weather-text').innerText = `大概率天气：晴朗 (网络拥挤)`;
+                document.getElementById('temp-range').innerText = `18° / 25°`;
+                document.getElementById('uv-val').innerText = `5 (中等)`;
+
                 render(buildList(dest, 25, 18, 5, "晴朗")); 
             } finally {
                 document.getElementById('loading-section').classList.add('hidden');
